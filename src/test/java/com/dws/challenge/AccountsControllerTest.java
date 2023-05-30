@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -255,10 +256,7 @@ class AccountsControllerTest {
     var shutdownLatch = new CountDownLatch(concurrentRequestCount);
     try {
       for (int i = 0; i < concurrentRequestCount; i++) {
-        executor.submit(() -> {
-          await(startLatch);
-          tryTransfer(transferRequest, shutdownLatch);
-        });
+        submit(executor, startLatch, transferRequest, shutdownLatch);
       }
       startLatch.countDown();
     } finally {
@@ -298,11 +296,8 @@ class AccountsControllerTest {
     var shutdownLatch = new CountDownLatch(concurrentRequestCount);
     try {
       for (String toAccountId : toAccounts) {
-        executor.submit(() -> {
-          await(startLatch);
-          var transferRequest = new TransferRequest(fromAccountId, toAccountId, transferred);
-          tryTransfer(transferRequest, shutdownLatch);
-        });
+        var transferRequest = new TransferRequest(fromAccountId, toAccountId, transferred);
+        submit(executor, startLatch, transferRequest, shutdownLatch);
       }
       startLatch.countDown();
     } finally {
@@ -340,10 +335,7 @@ class AccountsControllerTest {
     var shutdownLatch = new CountDownLatch(concurrentRequestCount);
     try {
       for (int i = 0; i < concurrentRequestCount; i++) {
-        executor.submit(() -> {
-          await(startLatch);
-          tryTransfer(transferRequest, shutdownLatch);
-        });
+        submit(executor, startLatch, transferRequest, shutdownLatch);
       }
       startLatch.countDown();
     } finally {
@@ -383,11 +375,8 @@ class AccountsControllerTest {
     var shutdownLatch = new CountDownLatch(concurrentRequestCount);
     try {
       for (String toAccountId : toAccounts) {
-        executor.submit(() -> {
-          await(startLatch);
-          var transferRequest = new TransferRequest(fromAccountId, toAccountId, transferred);
-          tryTransfer(transferRequest, shutdownLatch);
-        });
+        var transferRequest = new TransferRequest(fromAccountId, toAccountId, transferred);
+        submit(executor, startLatch, transferRequest, shutdownLatch);
       }
       startLatch.countDown();
     } finally {
@@ -412,6 +401,59 @@ class AccountsControllerTest {
     assertThat(this.accountsService.getAccount(fromAccountId).getBalance()).isEqualTo(BigDecimal.ZERO);
   }
 
+  @Test
+  @DisplayName("Money is transferred from acc1 to acc2 and back concurrently, verify no dead lock and resulting balance is the same")
+  void transferBidirectionally_noDeadLock() {
+    var fromAmount = BigDecimal.TEN;
+    var toAmount = fromAmount;
+    var transferred = BigDecimal.ONE;
+
+    var random = ThreadLocalRandom.current();
+    var fromAccountId = String.valueOf(random.nextLong());
+    var toAccountId = String.valueOf(random.nextLong());
+    var fromAccount = new Account(fromAccountId, fromAmount);
+    var toAccount = new Account(toAccountId, toAmount);
+
+    createAccount(fromAccount);
+    createAccount(toAccount);
+
+    var transferRequest = new TransferRequest(fromAccountId, toAccountId, transferred);
+    var reverseTransferRequest = new TransferRequest(toAccountId, fromAccountId, transferred);
+
+    var concurrentRequestCount = 10;
+    var executor = Executors.newCachedThreadPool();
+    var startLatch = new CountDownLatch(1);
+    var shutdownLatch = new CountDownLatch(concurrentRequestCount);
+    try {
+      for (int i = 0; i < concurrentRequestCount; i++) {
+        if (i % 2 == 0) { //evens for direct transfer
+          submit(executor, startLatch, transferRequest, shutdownLatch);
+        } else { //odds for reverse transfer
+          submit(executor, startLatch, reverseTransferRequest, shutdownLatch);
+        }
+      }
+      startLatch.countDown();
+    } finally {
+      await(shutdownLatch);
+      executor.shutdown();
+    }
+
+    var balance1 = this.accountsService.getAccount(fromAccountId).getBalance();
+    var balance2 = this.accountsService.getAccount(toAccountId).getBalance();
+
+    assertThat(balance1.add(balance2)).isEqualTo(fromAmount.multiply(BigDecimal.valueOf(2)));
+
+    assertThat(this.accountsService.getAccount(fromAccountId).getBalance()).isEqualTo(fromAmount);
+    assertThat(this.accountsService.getAccount(toAccountId).getBalance()).isEqualTo(toAmount);
+  }
+
+  private void submit(ExecutorService executor, CountDownLatch startLatch, TransferRequest transferRequest, CountDownLatch shutdownLatch) {
+    executor.submit(() -> {
+      await(startLatch);
+      tryTransfer(transferRequest, shutdownLatch);
+    });
+  }
+
 
   private void tryTransfer(TransferRequest transferRequest, CountDownLatch shutdownLatch) {
     transfer(transferRequest);
@@ -420,7 +462,7 @@ class AccountsControllerTest {
 
   @SneakyThrows
   private void await(CountDownLatch countDownLatch) {
-    countDownLatch.await(5, TimeUnit.SECONDS);
+    countDownLatch.await(10, TimeUnit.SECONDS);
   }
 
   @SneakyThrows

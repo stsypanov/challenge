@@ -5,12 +5,12 @@ import com.dws.challenge.domain.TransferRequest;
 import com.dws.challenge.domain.TransferStatus;
 import com.dws.challenge.repository.AccountsRepository;
 import lombok.EqualsAndHashCode;
-import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Semaphore;
@@ -43,12 +43,12 @@ public class AccountsService {
       return TransferStatus.TO_ACC_MISSING;
     }
 
-    final var accountPair = new AccountPairKey(from.toString(), to.toString());
+    final var accountPair = new AccountPairKey(from.getAccountId(), to.getAccountId());
     final var mutualLock = locks.computeIfAbsent(accountPair, key -> new Semaphore(1));
     mutualLock.acquire();
+    from.lock();
+    to.lock();
     try {
-      from.lock();
-      to.lock();
       var fromBalance = from.getBalance();
       var toBalance = to.getBalance();
       var transferAmount = request.getAmount();
@@ -77,10 +77,12 @@ public class AccountsService {
   }
 
   @EqualsAndHashCode
-  @RequiredArgsConstructor
   private static class AccountPairKey {
-    private final String fromId;
-    private final String toId;
+    private final Set<String> accIdCombination;
+
+    private AccountPairKey(String fromId, String toId) {
+      this.accIdCombination = Set.of(fromId, toId);
+    }
   }
 
 }
